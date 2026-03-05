@@ -6,6 +6,7 @@
 
 import io
 import json
+import os
 import subprocess
 import sys
 import traceback
@@ -15,6 +16,10 @@ from pathlib import Path
 
 import streamlit as st
 from PIL import Image, ImageEnhance, ImageFilter
+
+# ログイン認証（環境変数で設定、未設定ならログイン不要）
+AUTH_USERNAME = os.environ.get("GBP_APP_USERNAME", "")
+AUTH_PASSWORD = os.environ.get("GBP_APP_PASSWORD", "")
 
 # ============== 定数 ==============
 SIZE_PRESETS = {
@@ -275,13 +280,57 @@ def process_image(
 
 
 # ============== メインアプリ ==============
+def _render_login():
+    """ログイン画面"""
+    st.title("🖼️ 画像一括加工Webアプリ")
+    st.subheader("ログイン")
+    with st.form("login_form"):
+        username = st.text_input("ユーザー名")
+        password = st.text_input("パスワード", type="password")
+        submitted = st.form_submit_button("ログイン")
+        if submitted:
+            if username == AUTH_USERNAME and password == AUTH_PASSWORD:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("ユーザー名またはパスワードが正しくありません")
+
+
+def _reset_all():
+    """全データをリセット"""
+    for key in list(st.session_state.keys()):
+        if key not in ("authenticated",):
+            del st.session_state[key]
+    st.session_state.processed_images = []
+    st.session_state.source_images = []
+    st.session_state.selected_indices = []
+    st.rerun()
+
+
 def main():
     st.set_page_config(
         page_title="画像一括加工アプリ",
         page_icon="🖼️",
         layout="wide",
     )
+
+    # ログイン（認証が設定されている場合のみ）
+    if AUTH_USERNAME or AUTH_PASSWORD:
+        if "authenticated" not in st.session_state:
+            st.session_state.authenticated = False
+        if not st.session_state.authenticated:
+            _render_login()
+            return
+
     st.title("🖼️ 画像一括加工Webアプリ")
+
+    # ログアウトボタン（認証時）
+    if AUTH_USERNAME or AUTH_PASSWORD:
+        col_title, col_logout = st.columns([6, 1])
+        with col_logout:
+            if st.button("ログアウト"):
+                st.session_state.authenticated = False
+                st.rerun()
 
     # セッション状態の初期化
     if "processed_images" not in st.session_state:
@@ -388,6 +437,12 @@ def main():
             詳しくは `PLACES_API_SETUP.md` を参照してください。
             """)
 
+        st.divider()
+        # リセット（サイドバーからもアクセス可能）
+        if st.session_state.source_images or st.session_state.processed_images:
+            if st.button("🔄 リセット", key="sidebar_reset", help="画像をクリアして最初からやり直す"):
+                _reset_all()
+
     # ===== Main =====
     tab1, tab2 = st.tabs(["📍 GBP（店舗）取得", "📁 ローカル一括アップロード"])
 
@@ -459,7 +514,7 @@ def main():
                         st.warning(f"{f.name} の読み込みに失敗: {e}")
                 st.success(f"{len(st.session_state.source_images)} 枚の画像を読み込みました")
 
-    # ===== 取得画像の選択 =====
+    # ===== 取得画像の選択（st.fragmentでちらつき軽減） =====
     st.divider()
     if st.session_state.source_images:
         st.subheader("📋 加工する画像を選択")
@@ -473,47 +528,52 @@ def main():
             st.session_state.selected_indices = list(range(len(st.session_state.source_images)))
             st.session_state.source_images_hash = current_hash
 
-        # 全選択/全解除
         n_src = len(st.session_state.source_images)
-        col_btn1, col_btn2, _ = st.columns([1, 1, 4])
-        with col_btn1:
-            if st.button("全選択"):
-                st.session_state.selected_indices = list(range(n_src))
-                for i in range(n_src):
-                    st.session_state[f"sel_{n_src}_{i}"] = True
-                st.rerun()
-        with col_btn2:
-            if st.button("全解除"):
-                st.session_state.selected_indices = []
-                for i in range(n_src):
-                    st.session_state[f"sel_{n_src}_{i}"] = False
-                st.rerun()
 
-        # 画像グリッド（5列）で選択
-        cols_per_row = 5
-        for row_start in range(0, len(st.session_state.source_images), cols_per_row):
-            cols = st.columns(cols_per_row)
-            for col_idx, col in enumerate(cols):
-                img_idx = row_start + col_idx
-                if img_idx >= len(st.session_state.source_images):
-                    break
-                with col:
-                    img = st.session_state.source_images[img_idx]
-                    st.image(img, use_container_width=True, caption=f"#{img_idx + 1}")
-                    n_src = len(st.session_state.source_images)
-                    default_val = img_idx in st.session_state.selected_indices
-                    st.checkbox(
-                        "加工する",
-                        value=default_val,
-                        key=f"sel_{n_src}_{img_idx}",
-                    )
+        # 画像選択グリッドをfragmentで分離（チェック時のみこの部分が再実行され、ちらつき軽減）
+        _fragment = getattr(st, "fragment", getattr(st, "experimental_fragment", None))
 
-        # チェックボックスの状態から選択リストを構築
-        n_src = len(st.session_state.source_images)
-        st.session_state.selected_indices = [
-            i for i in range(n_src)
-            if st.session_state.get(f"sel_{n_src}_{i}", i in st.session_state.selected_indices)
-        ]
+        def _render_selection_grid():
+            col_btn1, col_btn2, _ = st.columns([1, 1, 4])
+            with col_btn1:
+                if st.button("全選択", key="btn_select_all"):
+                    st.session_state.selected_indices = list(range(n_src))
+                    for i in range(n_src):
+                        st.session_state[f"sel_{n_src}_{i}"] = True
+                    st.rerun()
+            with col_btn2:
+                if st.button("全解除", key="btn_select_none"):
+                    st.session_state.selected_indices = []
+                    for i in range(n_src):
+                        st.session_state[f"sel_{n_src}_{i}"] = False
+                    st.rerun()
+
+            cols_per_row = 5
+            for row_start in range(0, len(st.session_state.source_images), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for col_idx, col in enumerate(cols):
+                    img_idx = row_start + col_idx
+                    if img_idx >= len(st.session_state.source_images):
+                        break
+                    with col:
+                        img = st.session_state.source_images[img_idx]
+                        st.image(img, use_container_width=True, caption=f"#{img_idx + 1}")
+                        default_val = img_idx in st.session_state.selected_indices
+                        st.checkbox(
+                            "加工する",
+                            value=default_val,
+                            key=f"sel_{n_src}_{img_idx}",
+                        )
+
+            st.session_state.selected_indices = [
+                i for i in range(n_src)
+                if st.session_state.get(f"sel_{n_src}_{i}", i in st.session_state.selected_indices)
+            ]
+
+        if _fragment:
+            _fragment(_render_selection_grid)()
+        else:
+            _render_selection_grid()
 
         st.caption(f"選択中: {len(st.session_state.selected_indices)} 枚 / {len(st.session_state.source_images)} 枚")
 

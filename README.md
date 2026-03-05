@@ -29,6 +29,16 @@ streamlit run app.py
 
 > **Web上での利用**: GBP取得は **Places API キー必須** です。ローカルアップロードはそのまま利用できます。
 
+## ログイン認証（任意）
+
+環境変数で設定するとログイン画面が表示されます。
+
+- `GBP_APP_USERNAME` … ユーザー名
+- `GBP_APP_PASSWORD` … パスワード
+
+**Render**: ダッシュボード → Environment で追加  
+**ローカル**: `.env` に記載（`.env.example` を参照）
+
 ## 機能
 
 - **GBP取得**: 店舗のGoogle Maps URLを指定して、そのGBPの写真を最大30枚取得
