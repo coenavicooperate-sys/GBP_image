@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: gbp-image-app
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars: []
