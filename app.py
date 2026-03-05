@@ -627,12 +627,17 @@ def main():
                 zf.writestr(f"image_{i+1:04d}.jpg", buf.getvalue())
         zip_buffer.seek(0)
 
-        st.download_button(
-            label="📦 processed_images.zip をダウンロード",
-            data=zip_buffer,
-            file_name="processed_images.zip",
-            mime="application/zip",
-        )
+        col_dl, col_rst = st.columns([1, 1])
+        with col_dl:
+            st.download_button(
+                label="📦 processed_images.zip をダウンロード",
+                data=zip_buffer,
+                file_name="processed_images.zip",
+                mime="application/zip",
+            )
+        with col_rst:
+            if st.button("🔄 リセットして続けて作業", key="main_reset", help="画像をクリアして新しい画像を読み込む"):
+                _reset_all()
 
 
 if __name__ == "__main__":
