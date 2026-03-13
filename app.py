@@ -611,11 +611,21 @@ def main():
 
     # ===== プレビュー =====
     if st.session_state.processed_images:
-        st.subheader("📷 プレビュー（最初の3枚）")
-        cols = st.columns(3)
-        for i, img in enumerate(st.session_state.processed_images[:3]):
-            with cols[i]:
-                st.image(img, use_container_width=True, caption=f"画像 {i+1}")
+        st.subheader("📷 プレビュー（最初の10枚）")
+        preview_count = min(10, len(st.session_state.processed_images))
+        cols_per_row = 5
+        for row_start in range(0, preview_count, cols_per_row):
+            row_cols = st.columns(cols_per_row)
+            for col_idx, col in enumerate(row_cols):
+                img_idx = row_start + col_idx
+                if img_idx >= preview_count:
+                    break
+                with col:
+                    st.image(
+                        st.session_state.processed_images[img_idx],
+                        use_container_width=True,
+                        caption=f"画像 {img_idx + 1}",
+                    )
 
         # ===== ダウンロード =====
         st.subheader("📥 ダウンロード")
