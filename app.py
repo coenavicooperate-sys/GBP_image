@@ -279,6 +279,32 @@ def process_image(
     return result
 
 
+def save_image_webp_target_size(img: Image.Image, target_kb: int = 100) -> bytes:
+    """WebP形式で保存し、品質を調整して約target_kbになるようにする"""
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    target_bytes = target_kb * 1024
+    low, high = 30, 95
+    best = None
+    best_diff = float("inf")
+    for _ in range(8):
+        q = (low + high) // 2
+        buf = io.BytesIO()
+        img.save(buf, format="WEBP", quality=q, method=6)
+        data = buf.getvalue()
+        diff = abs(len(data) - target_bytes)
+        if diff < best_diff:
+            best_diff = diff
+            best = data
+        if len(data) > target_bytes:
+            low = q + 1
+        else:
+            high = q - 1
+        if low > high:
+            break
+    return best or data
+
+
 # ============== メインアプリ ==============
 def _render_login():
     """ログイン画面"""
@@ -632,9 +658,8 @@ def main():
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             for i, img in enumerate(st.session_state.processed_images):
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=95)
-                zf.writestr(f"image_{i+1:04d}.jpg", buf.getvalue())
+                data = save_image_webp_target_size(img, target_kb=100)
+                zf.writestr(f"image_{i+1:04d}.webp", data)
         zip_buffer.seek(0)
 
         col_dl, col_rst = st.columns([1, 1])
