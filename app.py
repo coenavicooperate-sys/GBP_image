@@ -279,18 +279,23 @@ def process_image(
     return result
 
 
-def save_image_webp_target_size(img: Image.Image, target_kb: int = 100) -> bytes:
-    """WebP形式で保存し、品質を調整して約target_kbになるようにする"""
+def save_image_target_size(
+    img: Image.Image, fmt: str, target_kb: int = 100
+) -> bytes:
+    """指定形式で保存し、品質を調整して約target_kbになるようにする"""
     if img.mode != "RGB":
         img = img.convert("RGB")
     target_bytes = target_kb * 1024
-    low, high = 30, 95
+    low, high = (30, 95) if fmt == "WEBP" else (40, 95)
     best = None
     best_diff = float("inf")
     for _ in range(8):
         q = (low + high) // 2
         buf = io.BytesIO()
-        img.save(buf, format="WEBP", quality=q, method=6)
+        if fmt == "WEBP":
+            img.save(buf, format="WEBP", quality=q, method=6)
+        else:
+            img.save(buf, format="JPEG", quality=q)
         data = buf.getvalue()
         diff = abs(len(data) - target_bytes)
         if diff < best_diff:
@@ -395,6 +400,16 @@ def main():
         size_preset = SIZE_PRESETS[size_choice]
         if size_preset == (1080, 1350):
             st.caption("📱 縦型: スマホ用に明るさ・コントラストを自動補正")
+
+        st.divider()
+
+        # 出力形式
+        output_format = st.selectbox(
+            "出力形式",
+            options=["WebP", "JPEG"],
+            index=0,
+            help="約100KB前後のファイルサイズで出力します",
+        )
 
         st.divider()
 
@@ -655,11 +670,13 @@ def main():
 
         # ===== ダウンロード =====
         st.subheader("📥 ダウンロード")
+        fmt = "WEBP" if output_format == "WebP" else "JPEG"
+        ext = "webp" if fmt == "WEBP" else "jpg"
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             for i, img in enumerate(st.session_state.processed_images):
-                data = save_image_webp_target_size(img, target_kb=100)
-                zf.writestr(f"image_{i+1:04d}.webp", data)
+                data = save_image_target_size(img, fmt=fmt, target_kb=100)
+                zf.writestr(f"image_{i+1:04d}.{ext}", data)
         zip_buffer.seek(0)
 
         col_dl, col_rst = st.columns([1, 1])
