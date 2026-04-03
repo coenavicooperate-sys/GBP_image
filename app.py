@@ -26,7 +26,24 @@ AUTH_PASSWORD = os.environ.get("GBP_APP_PASSWORD", "")
 SIZE_PRESETS = {
     "縦型 (1080x1350px)": (1080, 1350),
     "横型 (1024x682px)": (1024, 682),
+    "正方形 (512×512px)": (512, 512),
 }
+
+
+def _size_preset_slug(size_preset: tuple[int, int]) -> str:
+    """ウィジェット key 用（横型と正方形で重複しない）"""
+    if size_preset == (1080, 1350):
+        return "tate"
+    if size_preset == (512, 512):
+        return "sq512"
+    return "wide"
+
+
+def _preset_uses_tone_enhance(size_preset: tuple[int, int]) -> bool:
+    """縦型・正方形: 明るさ・コントラスト補正を適用"""
+    return size_preset in ((1080, 1350), (512, 512))
+
+
 LOGO_POSITIONS = {
     "左上": "top-left",
     "右上": "top-right",
@@ -242,7 +259,7 @@ def reduce_highlights(img: Image.Image, amount: float = 0.05) -> Image.Image:
 
 
 def enhance_for_smartphone(img: Image.Image) -> Image.Image:
-    """縦型（スマホ用）: 明るさ10%・コントラスト10%・ハイライト5%落とし"""
+    """スマホ向け・正方形向け: 明るさ10%・コントラスト10%・ハイライト5%落とし"""
     enhancer_b = ImageEnhance.Brightness(img)
     enhancer_c = ImageEnhance.Contrast(img)
     img = enhancer_b.enhance(1.10)  # 10%明るく
@@ -261,14 +278,13 @@ def process_image(
     opacity: float,
     logo_size_ratio: float,
     outline_width: int,
-    is_portrait: bool,
+    use_tone_enhance: bool,
 ) -> Image.Image:
-    """画像を加工（クロップ + 縦型時は補正 + ロゴ合成）"""
+    """画像を加工（クロップ + 必要ならトーン補正 + ロゴ合成）"""
     target_w, target_h = size_preset
     result = center_crop(img, target_w, target_h)
 
-    # 縦型（スマホ用）の場合は明るさ・コントラスト補正
-    if is_portrait:
+    if use_tone_enhance:
         result = enhance_for_smartphone(result)
 
     if logo_img:
@@ -332,8 +348,12 @@ def _build_processed_zip(
                 else:
                     raise
             zf.writestr(f"image_{i+1:04d}.{fext}", data)
-    is_tate = size_preset == (1080, 1350)
-    zip_file_name = "image_tate.zip" if is_tate else "processed_images.zip"
+    if size_preset == (1080, 1350):
+        zip_file_name = "image_tate.zip"
+    elif size_preset == (512, 512):
+        zip_file_name = "image_square_512.zip"
+    else:
+        zip_file_name = "processed_images.zip"
     return zip_buffer.getvalue(), zip_file_name
 
 
@@ -427,6 +447,8 @@ def main():
         size_preset = SIZE_PRESETS[size_choice]
         if size_preset == (1080, 1350):
             st.caption("📱 縦型: スマホ用に明るさ・コントラストを自動補正")
+        elif size_preset == (512, 512):
+            st.caption("📐 正方形: 512×512px。縦型と同様に明るさ・コントラストを自動補正")
 
         st.divider()
 
@@ -648,7 +670,7 @@ def main():
             images_to_process = [
                 st.session_state.source_images[i] for i in st.session_state.selected_indices
             ]
-            is_portrait = size_preset == (1080, 1350)
+            use_tone_enhance = _preset_uses_tone_enhance(size_preset)
             processed = []
             n_img = len(images_to_process)
 
@@ -684,7 +706,7 @@ def main():
                             opacity,
                             logo_size_ratio,
                             outline_width,
-                            is_portrait,
+                            use_tone_enhance,
                         )
                         processed.append(result)
                     except Exception as e:
@@ -753,7 +775,7 @@ def main():
                 data=zip_bytes,
                 file_name=zip_file_name,
                 mime="application/zip",
-                key=f"download_zip_{'tate' if size_preset == (1080, 1350) else 'wide'}_{gen}",
+                key=f"download_zip_{_size_preset_slug(size_preset)}_{gen}",
             )
         if st.button("🔄 リセットして続けて作業", key="main_reset", help="画像をクリアして新しい画像を読み込む"):
             _reset_all()
