@@ -555,7 +555,7 @@ def main():
                         st.warning(f"{f.name} の読み込みに失敗: {e}")
                 st.success(f"{len(st.session_state.source_images)} 枚の画像を読み込みました")
 
-    # ===== 取得画像の選択（st.fragmentでちらつき軽減） =====
+    # ===== 取得画像の選択 =====
     st.divider()
     if st.session_state.source_images:
         st.subheader("📋 加工する画像を選択")
@@ -571,9 +571,8 @@ def main():
 
         n_src = len(st.session_state.source_images)
 
-        # 画像選択グリッドをfragmentで分離（チェック時のみこの部分が再実行され、ちらつき軽減）
-        _fragment = getattr(st, "fragment", getattr(st, "experimental_fragment", None))
-
+        # st.fragment は部分再実行時に画面他部位のウィジェットが消えることがあるため使わない
+        # （加工後のダウンロードボタンが見えなくなる事象の対策）
         def _render_selection_grid():
             col_btn1, col_btn2, _ = st.columns([1, 1, 4])
             with col_btn1:
@@ -611,10 +610,7 @@ def main():
                 if st.session_state.get(f"sel_{n_src}_{i}", i in st.session_state.selected_indices)
             ]
 
-        if _fragment:
-            _fragment(_render_selection_grid)()
-        else:
-            _render_selection_grid()
+        _render_selection_grid()
 
         st.caption(f"選択中: {len(st.session_state.selected_indices)} 枚 / {len(st.session_state.source_images)} 枚")
 
@@ -650,8 +646,35 @@ def main():
             st.session_state.processed_images = processed
             st.success(f"{len(processed)} 枚の加工が完了しました")
 
-    # ===== プレビュー =====
+    # ===== 加工結果（ダウンロードはプレビューより上＝スクロールしなくても見える位置） =====
     if st.session_state.processed_images:
+        st.subheader("📥 ダウンロード")
+        fmt = "WEBP" if output_format == "WebP" else "JPEG"
+        ext = "webp" if fmt == "WEBP" else "jpg"
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for i, img in enumerate(st.session_state.processed_images):
+                data = save_image_target_size(img, fmt=fmt, target_kb=100)
+                zf.writestr(f"image_{i+1:04d}.{ext}", data)
+
+        zip_bytes = zip_buffer.getvalue()
+
+        is_tate = size_preset == (1080, 1350)
+        zip_file_name = "image_tate.zip" if is_tate else "processed_images.zip"
+
+        col_dl, col_rst = st.columns([1, 1])
+        with col_dl:
+            st.download_button(
+                label=f"📦 {zip_file_name} をダウンロード",
+                data=zip_bytes,
+                file_name=zip_file_name,
+                mime="application/zip",
+                key=f"download_zip_{'tate' if is_tate else 'wide'}",
+            )
+        with col_rst:
+            if st.button("🔄 リセットして続けて作業", key="main_reset", help="画像をクリアして新しい画像を読み込む"):
+                _reset_all()
+
         st.subheader("📷 プレビュー（最初の10枚）")
         preview_count = min(10, len(st.session_state.processed_images))
         cols_per_row = 5
@@ -667,29 +690,6 @@ def main():
                         use_container_width=True,
                         caption=f"画像 {img_idx + 1}",
                     )
-
-        # ===== ダウンロード =====
-        st.subheader("📥 ダウンロード")
-        fmt = "WEBP" if output_format == "WebP" else "JPEG"
-        ext = "webp" if fmt == "WEBP" else "jpg"
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            for i, img in enumerate(st.session_state.processed_images):
-                data = save_image_target_size(img, fmt=fmt, target_kb=100)
-                zf.writestr(f"image_{i+1:04d}.{ext}", data)
-        zip_buffer.seek(0)
-
-        col_dl, col_rst = st.columns([1, 1])
-        with col_dl:
-            st.download_button(
-                label="📦 processed_images.zip をダウンロード",
-                data=zip_buffer,
-                file_name="processed_images.zip",
-                mime="application/zip",
-            )
-        with col_rst:
-            if st.button("🔄 リセットして続けて作業", key="main_reset", help="画像をクリアして新しい画像を読み込む"):
-                _reset_all()
 
 
 if __name__ == "__main__":
