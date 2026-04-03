@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import traceback
 import urllib.request
 import zipfile
@@ -308,6 +309,32 @@ def save_image_target_size(
         if low > high:
             break
     return best or data
+
+
+def _build_processed_zip(
+    images: list[Image.Image],
+    output_format: str,
+    size_preset: tuple[int, int],
+) -> tuple[bytes, str]:
+    """加工済み画像から ZIP バイト列とファイル名を生成する"""
+    fmt = "WEBP" if output_format == "WebP" else "JPEG"
+    ext = "webp" if fmt == "WEBP" else "jpg"
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, img in enumerate(images):
+            try:
+                data = save_image_target_size(img, fmt=fmt, target_kb=100)
+                fext = ext
+            except Exception:
+                if fmt == "WEBP":
+                    data = save_image_target_size(img, fmt="JPEG", target_kb=100)
+                    fext = "jpg"
+                else:
+                    raise
+            zf.writestr(f"image_{i+1:04d}.{fext}", data)
+    is_tate = size_preset == (1080, 1350)
+    zip_file_name = "image_tate.zip" if is_tate else "processed_images.zip"
+    return zip_buffer.getvalue(), zip_file_name
 
 
 # ============== メインアプリ ==============
@@ -623,57 +650,113 @@ def main():
             ]
             is_portrait = size_preset == (1080, 1350)
             processed = []
-            progress = st.progress(0)
-            for i, img in enumerate(images_to_process):
-                try:
-                    result = process_image(
-                        img,
-                        size_preset,
-                        logo_img,
-                        logo_position,
-                        x_offset,
-                        y_offset,
-                        opacity,
-                        logo_size_ratio,
-                        outline_width,
-                        is_portrait,
+            n_img = len(images_to_process)
+
+            with st.status(
+                f"🔄 一括加工中（0 / {n_img} 枚）",
+                expanded=True,
+            ) as run_status:
+                run_status.write(
+                    "画像を順に加工しています。ブラウザを閉じず、このままお待ちください。"
+                )
+                prog = st.progress(0)
+                prog_label = st.empty()
+                prog_label.caption(f"進捗: 0 / {n_img} 枚（0%）")
+
+                for i, img in enumerate(images_to_process):
+                    pct = int(100 * (i + 1) / n_img)
+                    run_status.update(
+                        label=f"🔄 一括加工中（{i + 1} / {n_img} 枚）",
+                        state="running",
                     )
-                    processed.append(result)
-                except Exception as e:
-                    st.warning(f"画像 {i+1} の加工に失敗: {e}")
-                progress.progress((i + 1) / len(images_to_process))
-            progress.empty()
-            st.session_state.processed_images = processed
+                    prog_label.caption(
+                        f"進捗: {i + 1} / {n_img} 枚（{pct}%）— "
+                        f"画像 {i + 1} を加工しています…"
+                    )
+                    try:
+                        result = process_image(
+                            img,
+                            size_preset,
+                            logo_img,
+                            logo_position,
+                            x_offset,
+                            y_offset,
+                            opacity,
+                            logo_size_ratio,
+                            outline_width,
+                            is_portrait,
+                        )
+                        processed.append(result)
+                    except Exception as e:
+                        st.warning(f"画像 {i+1} の加工に失敗: {e}")
+                    prog.progress((i + 1) / n_img)
+                    time.sleep(0.04)
+
+                prog_label.empty()
+                prog.empty()
+
+                st.session_state.processed_images = processed
+                st.session_state["_process_generation"] = st.session_state.get("_process_generation", 0) + 1
+                gen = st.session_state["_process_generation"]
+
+                if processed:
+                    run_status.update(
+                        label="📦 ダウンロード用ZIPを作成中…",
+                        state="running",
+                    )
+                    run_status.write("加工済み画像をまとめています。少しお待ちください。")
+                    try:
+                        zb, zn = _build_processed_zip(processed, output_format, size_preset)
+                        st.session_state["_processed_zip_bytes"] = zb
+                        st.session_state["_processed_zip_file_name"] = zn
+                        st.session_state["_processed_zip_meta"] = (gen, output_format, size_preset)
+                    except Exception as e:
+                        for k in ("_processed_zip_bytes", "_processed_zip_file_name", "_processed_zip_meta"):
+                            st.session_state.pop(k, None)
+                        st.error(f"ZIPの作成に失敗しました: {e}")
+                else:
+                    for k in ("_processed_zip_bytes", "_processed_zip_file_name", "_processed_zip_meta"):
+                        st.session_state.pop(k, None)
+
+                run_status.update(
+                    label=f"✅ 完了（{len(processed)} 枚を加工）",
+                    state="complete",
+                )
+
             st.success(f"{len(processed)} 枚の加工が完了しました")
 
     # ===== 加工結果（ダウンロードはプレビューより上＝スクロールしなくても見える位置） =====
     if st.session_state.processed_images:
         st.subheader("📥 ダウンロード")
-        fmt = "WEBP" if output_format == "WebP" else "JPEG"
-        ext = "webp" if fmt == "WEBP" else "jpg"
-        zip_buffer = io.BytesIO()
-        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            for i, img in enumerate(st.session_state.processed_images):
-                data = save_image_target_size(img, fmt=fmt, target_kb=100)
-                zf.writestr(f"image_{i+1:04d}.{ext}", data)
+        gen = st.session_state.get("_process_generation", 0)
+        meta = (gen, output_format, size_preset)
+        zip_bytes = st.session_state.get("_processed_zip_bytes")
+        zip_file_name = st.session_state.get("_processed_zip_file_name")
+        if st.session_state.get("_processed_zip_meta") != meta or not zip_bytes:
+            try:
+                zip_bytes, zip_file_name = _build_processed_zip(
+                    st.session_state.processed_images,
+                    output_format,
+                    size_preset,
+                )
+                st.session_state["_processed_zip_bytes"] = zip_bytes
+                st.session_state["_processed_zip_file_name"] = zip_file_name
+                st.session_state["_processed_zip_meta"] = meta
+            except Exception as e:
+                st.error(f"ダウンロード用ZIPの作成に失敗しました: {e}")
+                st.caption("出力形式を JPEG に変えて再実行するか、枚数を減らしてお試しください。")
+                zip_bytes = None
 
-        zip_bytes = zip_buffer.getvalue()
-
-        is_tate = size_preset == (1080, 1350)
-        zip_file_name = "image_tate.zip" if is_tate else "processed_images.zip"
-
-        col_dl, col_rst = st.columns([1, 1])
-        with col_dl:
+        if zip_bytes:
             st.download_button(
                 label=f"📦 {zip_file_name} をダウンロード",
                 data=zip_bytes,
                 file_name=zip_file_name,
                 mime="application/zip",
-                key=f"download_zip_{'tate' if is_tate else 'wide'}",
+                key=f"download_zip_{'tate' if size_preset == (1080, 1350) else 'wide'}_{gen}",
             )
-        with col_rst:
-            if st.button("🔄 リセットして続けて作業", key="main_reset", help="画像をクリアして新しい画像を読み込む"):
-                _reset_all()
+        if st.button("🔄 リセットして続けて作業", key="main_reset", help="画像をクリアして新しい画像を読み込む"):
+            _reset_all()
 
         st.subheader("📷 プレビュー（最初の10枚）")
         preview_count = min(10, len(st.session_state.processed_images))
